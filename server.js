@@ -173,30 +173,50 @@ app.post("/buyPack", authenticateUser, async (req, res) => {
 
       remainingUP = currentUP - pack.price;
 
-      for (const card of cardsPulled) {
-        const cardRef = userRef.collection("cards").doc(card.id);
-        const cardSnap = await tx.get(cardRef);
+      // =========================
+// SAFE FIRESTORE TRANSACTION FIX
+// =========================
 
-        // ✅ FIXED: exists is PROPERTY, not function
-        if (cardSnap.exists) {
-          card.isDuplicate = true;
-          currentDust += 10;
+// STEP 1: READ ALL FIRST
+const cardSnapshots = [];
 
-          tx.update(cardRef, {
-            quantity: (cardSnap.data().quantity || 1) + 1,
-            lastAcquiredAt: admin.firestore.FieldValue.serverTimestamp(),
-          });
-        } else {
-          card.isDuplicate = false;
+for (const card of cardsPulled) {
+  const cardRef = userRef.collection("cards").doc(card.id);
+  const snap = await transaction.get(cardRef);
 
-          tx.set(cardRef, {
-            ...card,
-            quantity: 1,
-            acquiredAt: admin.firestore.FieldValue.serverTimestamp(),
-          });
-        }
-      }
+  cardSnapshots.push({ card, snap, ref: cardRef });
+}
 
+// STEP 2: WRITE AFTER ALL READS
+for (const item of cardSnapshots) {
+  const { card, snap, ref } = item;
+
+  if (snap.exists) {
+    card.isDuplicate = true;
+    card.dustReward = DUST_VALUES[card.rarity] || 5;
+    currentDust += card.dustReward;
+
+    transaction.update(ref, {
+      quantity: (snap.data().quantity || 1) + 1,
+      lastAcquiredAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+  } else {
+    card.isDuplicate = false;
+
+    transaction.set(ref, {
+      id: card.id,
+      name: card.name,
+      emoji: card.emoji,
+      rarity: card.rarity,
+      description: card.description,
+      quantity: 1,
+      acquiredAt: admin.firestore.FieldValue.serverTimestamp(),
+      source: `store_pack_${packId}`,
+      originalOwner: req.user.uid
+    });
+  }
+}
+      
       dust = currentDust;
 
       tx.update(userRef, {
