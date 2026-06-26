@@ -62,7 +62,7 @@ async function authenticateUser(req, res, next) {
   }
 }
 
-// ================= HEALTH =================
+// ================= HEALTH CHECK =================
 app.get("/", (req, res) => {
   res.send("🚀 UrjaRise Backend Running");
 });
@@ -70,27 +70,28 @@ app.get("/", (req, res) => {
 // ================= CARD SYSTEM =================
 const CARD_POOL = [
   { id: "c1", name: "Morning Spark", emoji: "🌅", rarity: "Common", description: "Waking up on time builds momentum." },
-  { id: "c2", name: "Tiny Wins", emoji: "🌱", rarity: "Common" },
-  { id: "c3", name: "Focus Seed", emoji: "🌰", rarity: "Common" },
+  { id: "c2", name: "Tiny Wins", emoji: "🌱", rarity: "Common", description: "Small consistent gains lead to massive results." },
+  { id: "c3", name: "Focus Seed", emoji: "🌰", rarity: "Common", description: "Plant a thought, reap habits." },
 
-  { id: "u1", name: "Healthy Habit", emoji: "🥗", rarity: "Uncommon" },
-  { id: "u2", name: "Early Bird", emoji: "🦅", rarity: "Uncommon" },
+  { id: "u1", name: "Healthy Habit", emoji: "🥗", rarity: "Uncommon", description: "Better fuel = better output." },
+  { id: "u2", name: "Early Bird", emoji: "🦅", rarity: "Uncommon", description: "Morning control wins the day." },
 
-  { id: "r1", name: "Focus Warrior", emoji: "⚔️", rarity: "Rare" },
-  { id: "r2", name: "Consistency Engine", emoji: "🚂", rarity: "Rare" },
+  { id: "r1", name: "Focus Warrior", emoji: "⚔️", rarity: "Rare", description: "Deep work shield." },
+  { id: "r2", name: "Consistency Engine", emoji: "🚂", rarity: "Rare", description: "Never stops moving." },
 
-  { id: "e1", name: "Iron Discipline", emoji: "🛡️", rarity: "Epic" },
-  { id: "e2", name: "Zen Master", emoji: "🧘", rarity: "Epic" },
+  { id: "e1", name: "Iron Discipline", emoji: "🛡️", rarity: "Epic", description: "Unbreakable focus." },
+  { id: "e2", name: "Zen Master", emoji: "🧘", rarity: "Epic", description: "Calm control." },
 
-  { id: "l1", name: "Time Master", emoji: "⏳", rarity: "Legendary" },
-  { id: "l2", name: "Limit Breaker", emoji: "💥", rarity: "Legendary" },
+  { id: "l1", name: "Time Master", emoji: "⏳", rarity: "Legendary", description: "Bends time." },
+  { id: "l2", name: "Limit Breaker", emoji: "💥", rarity: "Legendary", description: "Breaks limits." },
 
-  { id: "m1", name: "Dragon Discipline", emoji: "🐉", rarity: "Mythical" },
-  { id: "m2", name: "Infinite Focus", emoji: "🌌", rarity: "Mythical" },
+  { id: "m1", name: "Dragon Discipline", emoji: "🐉", rarity: "Mythical", description: "Power unleashed." },
+  { id: "m2", name: "Infinite Focus", emoji: "🌌", rarity: "Mythical", description: "Endless flow." },
 
-  { id: "d1", name: "Cosmic Growth", emoji: "🪐", rarity: "Divine" },
+  { id: "d1", name: "Cosmic Growth", emoji: "🪐", rarity: "Divine", description: "Universal evolution." },
 ];
 
+// ================= CHANCES =================
 const PACK_CHANCES = {
   basic: { Common: 0.7, Uncommon: 0.25, Rare: 0.05 },
   growth: { Common: 0.4, Uncommon: 0.35, Rare: 0.2, Epic: 0.05 },
@@ -99,11 +100,7 @@ const PACK_CHANCES = {
   mythical: { Epic: 0.5, Legendary: 0.4, Mythical: 0.09, Divine: 0.01 },
 };
 
-const GUARANTEED = {
-  legendary: ["Epic", "Legendary", "Mythical"],
-  mythical: ["Legendary", "Mythical", "Divine"],
-};
-
+// ================= HELPERS =================
 function rollRarity(chances) {
   const r = Math.random();
   let sum = 0;
@@ -118,7 +115,7 @@ function rollRarity(chances) {
 
 function pickCard(rarities) {
   const pool = CARD_POOL.filter(c => rarities.includes(c.rarity));
-  return { ...pool[Math.floor(Math.random() * pool.length) || 0] };
+  return { ...pool[Math.floor(Math.random() * pool.length)] };
 }
 
 // ================= BUY PACK =================
@@ -138,31 +135,22 @@ app.post("/buyPack", authenticateUser, async (req, res) => {
     let cardsPulled = [];
 
     const chances = PACK_CHANCES[packId];
-    const guaranteed = GUARANTEED[packId];
-    let met = !guaranteed;
 
+    // ================= CARD GENERATION =================
     for (let i = 0; i < pack.cards; i++) {
       const rarity = rollRarity(chances);
-
-      if (guaranteed && guaranteed.includes(rarity)) {
-        met = true;
-      }
-
-      // FIXED LOGIC
-      const finalRarity =
-        i === pack.cards - 1 && !met
-          ? guaranteed[Math.floor(Math.random() * guaranteed.length)]
-          : rarity;
-
-      cardsPulled.push(pickCard([finalRarity]));
+      cardsPulled.push(pickCard([rarity]));
     }
 
+    // ================= TRANSACTION =================
     await db.runTransaction(async (tx) => {
-      const snap = await tx.get(userRef);
+      const userSnap = await tx.get(userRef);
 
-      if (!snap.exists) throw new Error("User not found");
+      if (!userSnap.exists) {
+        throw new Error("User not found");
+      }
 
-      const user = snap.data();
+      const user = userSnap.data();
 
       const currentUP = user.urjaPoints || 0;
       let currentDust = user.cardDust || 0;
@@ -173,56 +161,54 @@ app.post("/buyPack", authenticateUser, async (req, res) => {
 
       remainingUP = currentUP - pack.price;
 
-      // =========================
-// SAFE FIRESTORE TRANSACTION FIX
-// =========================
+      // ================= READ FIRST =================
+      const cardSnapshots = [];
 
-// STEP 1: READ ALL FIRST
-const cardSnapshots = [];
+      for (const card of cardsPulled) {
+        const cardRef = userRef.collection("cards").doc(card.id);
+        const snap = await tx.get(cardRef);
 
-for (const card of cardsPulled) {
-  const cardRef = userRef.collection("cards").doc(card.id);
-  const snap = await transaction.get(cardRef);
+        cardSnapshots.push({ card, snap, ref: cardRef });
+      }
 
-  cardSnapshots.push({ card, snap, ref: cardRef });
-}
+      // ================= WRITE AFTER =================
+      for (const item of cardSnapshots) {
+        const { card, snap, ref } = item;
 
-// STEP 2: WRITE AFTER ALL READS
-for (const item of cardSnapshots) {
-  const { card, snap, ref } = item;
+        if (snap.exists) {
+          card.isDuplicate = true;
+          card.dustReward = 5;
+          currentDust += card.dustReward;
 
-  if (snap.exists) {
-    card.isDuplicate = true;
-    card.dustReward = DUST_VALUES[card.rarity] || 5;
-    currentDust += card.dustReward;
+          tx.update(ref, {
+            quantity: (snap.data().quantity || 1) + 1,
+            lastAcquiredAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+        } else {
+          card.isDuplicate = false;
 
-    transaction.update(ref, {
-      quantity: (snap.data().quantity || 1) + 1,
-      lastAcquiredAt: admin.firestore.FieldValue.serverTimestamp()
-    });
-  } else {
-    card.isDuplicate = false;
+          tx.set(ref, {
+            id: card.id,
+            name: card.name,
+            emoji: card.emoji,
+            rarity: card.rarity,
+            description: card.description,
+            quantity: 1,
+            acquiredAt: admin.firestore.FieldValue.serverTimestamp(),
+            source: `store_pack_${packId}`,
+            originalOwner: req.user.uid,
+          });
+        }
+      }
 
-    transaction.set(ref, {
-      id: card.id,
-      name: card.name,
-      emoji: card.emoji,
-      rarity: card.rarity,
-      description: card.description,
-      quantity: 1,
-      acquiredAt: admin.firestore.FieldValue.serverTimestamp(),
-      source: `store_pack_${packId}`,
-      originalOwner: req.user.uid
-    });
-  }
-}
-      
-      dust = currentDust;
+      currentDust = currentDust;
 
       tx.update(userRef, {
         urjaPoints: remainingUP,
-        cardDust: dust,
+        cardDust: currentDust,
       });
+
+      dust = currentDust;
     });
 
     res.json({
@@ -237,8 +223,9 @@ for (const item of cardSnapshots) {
   }
 });
 
-// ================= START =================
+// ================= START SERVER =================
 const PORT = process.env.PORT || 3000;
+
 app.listen(PORT, () => {
-  console.log("🚀 Server running on", PORT);
+  console.log("🚀 Server running on port", PORT);
 });
