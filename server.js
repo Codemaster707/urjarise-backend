@@ -246,7 +246,7 @@ app.post("/buyPack", authenticateUser, async (req, res) => {
         const cardRef = userRef.collection("cards").doc(card.id);
         const cardDoc = await transaction.get(cardRef);
 
-        if (cardDoc.exists()) {
+        if (cardDoc.exists) {
           card.isDuplicate = true;
           card.dustReward = DUST_VALUES[card.rarity] || 5;
           currentDust += card.dustReward;
